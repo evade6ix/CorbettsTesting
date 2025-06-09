@@ -3,6 +3,9 @@ const { connectDB } = require("./db");
 require("dotenv").config();
 
 const PAGE_LIMIT = 100; // Max items per page (Lightspeed max)
+const MAX_CONCURRENT_REQUESTS = 3;
+const MAX_RETRIES = 5;
+const RETRY_BASE_DELAY = 1000;
 
 async function getAccessToken() {
   const db = await connectDB();
@@ -43,48 +46,89 @@ async function getAccessToken() {
   }
 }
 
-async function fetchInventoryData() {
-  const token = await getAccessToken();
-  const accountID = process.env.ACCOUNT_ID;
-
-  let allItems = [];
-  let nextUrl = `https://api.lightspeedapp.com/API/V3/Account/${accountID}/Item.json?limit=${PAGE_LIMIT}&load_relations=${encodeURIComponent(JSON.stringify(["ItemShops"]))}`;
-
-  let pageCount = 0;
-
-  while (nextUrl) {
-    pageCount++;
-    console.log(`Fetching page ${pageCount}: ${nextUrl}...`);
-
-    const res = await axios.get(nextUrl, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
-
-    const items = res.data.Item || [];
-    allItems = allItems.concat(items);
-
-    // Get next page URL from response metadata
-    nextUrl = res.data['@attributes']?.next || null;
-  }
-
-  // Filter items to only those with '2024' or '2025' in the description
-  const filteredItems = allItems.filter(item => /2024|2025/.test(item.description));
-
-  // Map to your inventory format
-  const inventory = filteredItems.map(item => {
-    const customSku = item.customSku;
-    const name = item.description;
-    const locations = (item.ItemShops?.ItemShop || []).map(loc => ({
-      location: loc.Shop ? loc.Shop.name : "Unknown",
-      stock: parseInt(loc.qoh || "0")
-    }));
-    return { customSku, name, locations };
-  });
-
-  console.log(`Fetched ${inventory.length} filtered items total.`);
-
-  return inventory;
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+async function fetchPage(url, token, refreshTokenFunc, retryCount = 0) {
+  try {
+    const res = await axios.get(url, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    return { data: res.data, token };
+  } catch (err) {
+    const status = err.response?.status;
+
+    if (status === 401 && retryCount === 0) {
+      // Token expired, refresh token once then retry
+      console.log("⚠️ Access token expired, refreshing...");
+      const newToken = await refreshTokenFunc();
+      return fetchPage(url, newToken, refreshTokenFunc, retryCount + 1);
+    }
+
+    if ((status === 429 || status === 503) && retryCount < MAX_RETRIES) {
+      const delayMs = RETRY_BASE_DELAY * Math.pow(2, retryCount);
+      console.warn(`Rate limited or service unavailable. Retrying in ${delayMs} ms...`);
+      await delay(delayMs);
+      return fetchPage(url, token, refreshTokenFunc, retryCount + 1);
+    }
+
+    throw err;
+  }
+}
+
+async function fetchInventoryData() {
+  let accessToken = await getAccessToken();
+  const accountID = process.env.ACCOUNT_ID;
+
+  const firstUrl = `https://api.lightspeedapp.com/API/V3/Account/${accountID}/Item.json?limit=${PAGE_LIMIT}&load_relations=${encodeURIComponent(JSON.stringify(["ItemShops"]))}&sort=itemID`;
+
+  const queue = [firstUrl];
+  const results = [];
+  let activeRequests = 0;
+
+  return new Promise((resolve, reject) => {
+    const processQueue = async () => {
+      if (queue.length === 0 && activeRequests === 0) {
+        // All done
+        const filtered = results.filter(item => /2024|2025/.test(item.description));
+        const inventory = filtered.map(item => ({
+          customSku: item.customSku,
+          name: item.description,
+          locations: (item.ItemShops?.ItemShop || []).map(loc => ({
+            location: loc.Shop ? loc.Shop.name : "Unknown",
+            stock: parseInt(loc.qoh || "0")
+          }))
+        }));
+        console.log(`Fetched ${inventory.length} items total.`);
+        resolve(inventory);
+        return;
+      }
+
+      while (queue.length > 0 && activeRequests < MAX_CONCURRENT_REQUESTS) {
+        const url = queue.shift();
+        activeRequests++;
+
+        fetchPage(url, accessToken, getAccessToken)
+          .then(({ data, token }) => {
+            accessToken = token; // Update token if refreshed
+
+            results.push(...(data.Item || []));
+
+            const nextUrl = data['@attributes']?.next;
+            if (nextUrl) queue.push(nextUrl);
+
+            activeRequests--;
+            processQueue();
+          })
+          .catch(err => {
+            reject(err);
+          });
+      }
+    };
+
+    processQueue();
+  });
+}
 
 module.exports = { getAccessToken, fetchInventoryData };

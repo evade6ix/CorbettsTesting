@@ -2,16 +2,21 @@ const axios = require("axios")
 require("dotenv").config()
 
 async function getAccessToken() {
-  const { data } = await axios.post(
-    "https://cloud.lightspeedapp.com/oauth/access_token.php",
-    new URLSearchParams({
-      client_id: process.env.CLIENT_ID,
-      client_secret: process.env.CLIENT_SECRET,
-      refresh_token: process.env.REFRESH_TOKEN,
-      grant_type: "refresh_token"
-    })
-  )
-  return data.access_token
+  try {
+    const { data } = await axios.post(
+      "https://cloud.lightspeedapp.com/oauth/access_token.php",
+      new URLSearchParams({
+        client_id: process.env.CLIENT_ID,
+        client_secret: process.env.CLIENT_SECRET,
+        refresh_token: process.env.REFRESH_TOKEN,
+        grant_type: "refresh_token"
+      })
+    )
+    return data.access_token
+  } catch (err) {
+    console.error("❌ Failed to get access token:", err.response?.data || err.message)
+    throw err
+  }
 }
 
 async function fetchInventoryData() {

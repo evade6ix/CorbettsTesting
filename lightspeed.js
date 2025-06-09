@@ -50,7 +50,7 @@ async function fetchInventoryData() {
     `https://api.lightspeedapp.com/API/Account/${accountID}/Item.json`,
     {
       headers: { Authorization: `Bearer ${token}` },
-      params: { load_relations: "ItemShops" }
+      params: { load_relations: JSON.stringify(["ItemShops"]) }
     }
   );
 

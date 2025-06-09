@@ -22,16 +22,20 @@ async function getAccessToken() {
       { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
     );
 
-    await db.collection("tokens").updateOne(
-      { type: "lightspeed" },
-      {
-        $set: {
-          access_token: data.access_token,
-          refresh_token: data.refresh_token,
-          updatedAt: new Date()
-        }
-      }
-    );
+    const updateData = {
+  access_token: data.access_token,
+  updatedAt: new Date()
+};
+
+if (data.refresh_token) {
+  updateData.refresh_token = data.refresh_token;
+}
+
+await db.collection("tokens").updateOne(
+  { type: "lightspeed" },
+  { $set: updateData }
+);
+
 
     console.log("✅ Got access token");
     return data.access_token;

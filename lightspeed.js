@@ -59,10 +59,6 @@ async function fetchPage(token, accountID, page, updatedSince, retryCount = 0) {
       limit: PAGE_LIMIT,
       page
     };
-    if (updatedSince) {
-      params.updatedSince = updatedSince; // Lightspeed uses 'updatedSince' for incremental sync (check docs)
-    }
-
     const res = await axios.get(
       `https://api.lightspeedapp.com/API/Account/${accountID}/Item.json`,
       {

@@ -3,7 +3,7 @@ const { connectDB } = require("./db");
 require("dotenv").config();
 
 const PAGE_LIMIT = 100; // Max items per page (Lightspeed max)
-const MAX_CONCURRENT_REQUESTS = 3;
+const MAX_CONCURRENT_REQUESTS = 10;
 const MAX_RETRIES = 5;
 const RETRY_BASE_DELAY = 1000;
 

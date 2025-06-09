@@ -8,10 +8,21 @@ require("dotenv").config();
 const app = express();
 const port = process.env.PORT || 3000;
 
-// Enable CORS only for your frontend domain
+const allowedOrigins = [
+  "https://www.corbetts.com",
+  "https://store-186hk-1.mybigcommerce.com"  // Add your BigCommerce store URL here
+];
+
 app.use(cors({
-  origin: "https://www.corbetts.com"
+  origin: function(origin, callback) {
+    if (!origin) return callback(null, true); // Allow requests like Postman or curl with no origin
+    if (allowedOrigins.indexOf(origin) === -1) {
+      return callback(new Error(`CORS policy does not allow access from ${origin}`), false);
+    }
+    return callback(null, true);
+  }
 }));
+
 
 // ✅ Handle OAuth callback and store tokens in DB
 app.get("/callback", async (req, res) => {

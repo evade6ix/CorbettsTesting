@@ -81,42 +81,34 @@ async function fetchInventoryData() {
   const accountID = process.env.ACCOUNT_ID;
   const baseUrl = `https://api.lightspeedapp.com/API/V3/Account/${accountID}/Item.json?limit=${PAGE_LIMIT}&load_relations=${encodeURIComponent(JSON.stringify(["ItemShops"]))}`;
 
-  let offset = 0;
   const allResults = [];
-  let finished = false;
+  let offset = 0;
   let totalFetched = 0;
+  let keepGoing = true;
 
-  while (!finished) {
-    const batch = [];
+  while (keepGoing) {
+    const url = `${baseUrl}&offset=${offset}`;
 
-    for (let i = 0; i < CONCURRENCY; i++) {
-      const thisOffset = offset;
-      const url = `${baseUrl}&offset=${thisOffset}`;
-      offset += PAGE_LIMIT;
+    try {
+      const { data, token } = await fetchPage(url, accessToken, getAccessToken);
+      accessToken = token;
 
-      batch.push(
-        fetchPage(url, accessToken, getAccessToken)
-          .then(({ data, token }) => {
-            accessToken = token;
-            const items = data.Item || [];
+      const items = data.Item || [];
+      const count = items.length;
+      totalFetched += count;
+      allResults.push(...items);
 
-            allResults.push(...items);
-            totalFetched += items.length;
+      console.log(`📦 Offset ${offset} — ${count} items (Total: ${totalFetched})`);
 
-            console.log(`📦 Offset ${thisOffset} — ${items.length} items (Total so far: ${totalFetched})`);
-
-            if (items.length < PAGE_LIMIT) {
-              finished = true;
-            }
-          })
-          .catch(err => {
-            console.error(`❌ Offset ${thisOffset} failed:`, err.message || err);
-            finished = true;
-          })
-      );
+      if (count < PAGE_LIMIT) {
+        keepGoing = false;
+      } else {
+        offset += PAGE_LIMIT;
+      }
+    } catch (err) {
+      console.error(`❌ Failed offset ${offset}:`, err.message || err);
+      keepGoing = false;
     }
-
-    await Promise.all(batch);
   }
 
   const filtered = allResults.filter(item => /2024|2025/.test(item.description || ""));

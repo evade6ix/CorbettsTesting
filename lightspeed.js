@@ -2,8 +2,8 @@ const axios = require("axios");
 const { connectDB } = require("./db");
 require("dotenv").config();
 
-const PAGE_LIMIT = 100;
-const CONCURRENCY = 10;
+const PAGE_LIMIT = 100; // max per Lightspeed docs
+const MAX_CONCURRENT_REQUESTS = 5;
 const MAX_RETRIES = 5;
 const RETRY_BASE_DELAY = 1000;
 
@@ -22,7 +22,7 @@ async function getAccessToken() {
         client_id: process.env.CLIENT_ID,
         client_secret: process.env.CLIENT_SECRET,
         refresh_token: tokenDoc.refresh_token,
-        grant_type: "refresh_token"
+        grant_type: "refresh_token",
       }),
       { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
     );
@@ -33,8 +33,8 @@ async function getAccessToken() {
         $set: {
           access_token: data.access_token,
           refresh_token: data.refresh_token,
-          updatedAt: new Date()
-        }
+          updatedAt: new Date(),
+        },
       }
     );
 
@@ -47,13 +47,13 @@ async function getAccessToken() {
 }
 
 function delay(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function fetchPage(url, token, refreshTokenFunc, retryCount = 0) {
   try {
     const res = await axios.get(url, {
-      headers: { Authorization: `Bearer ${token}` }
+      headers: { Authorization: `Bearer ${token}` },
     });
     return { data: res.data, token };
   } catch (err) {
@@ -66,8 +66,8 @@ async function fetchPage(url, token, refreshTokenFunc, retryCount = 0) {
     }
 
     if ((status === 429 || status === 503) && retryCount < MAX_RETRIES) {
-      const delayMs = RETRY_BASE_DELAY * Math.pow(2, retryCount);
-      console.warn(`⚠️ Rate limited. Retrying in ${delayMs}ms...`);
+      const delayMs = RETRY_BASE_DELAY * 2 ** retryCount;
+      console.warn(`Rate limited or service unavailable. Retrying in ${delayMs} ms...`);
       await delay(delayMs);
       return fetchPage(url, token, refreshTokenFunc, retryCount + 1);
     }
@@ -79,51 +79,60 @@ async function fetchPage(url, token, refreshTokenFunc, retryCount = 0) {
 async function fetchInventoryData() {
   let accessToken = await getAccessToken();
   const accountID = process.env.ACCOUNT_ID;
-  const baseUrl = `https://api.lightspeedapp.com/API/V3/Account/${accountID}/Item.json?limit=${PAGE_LIMIT}&load_relations=${encodeURIComponent(JSON.stringify(["ItemShops"]))}`;
 
-  const allResults = [];
-  let offset = 0;
-  let totalFetched = 0;
-  let keepGoing = true;
+  const baseUrl = `https://api.lightspeedapp.com/API/V3/Account/${accountID}/Item.json?limit=${PAGE_LIMIT}&load_relations=${encodeURIComponent(
+    JSON.stringify(["ItemShops"])
+  )}&sort=itemID`;
 
-  while (keepGoing) {
-    const url = `${baseUrl}&offset=${offset}`;
+  let queue = [baseUrl];
+  let results = [];
+  let activeRequests = 0;
 
-    try {
-      const { data, token } = await fetchPage(url, accessToken, getAccessToken);
-      accessToken = token;
-
-      const items = data.Item || [];
-      const count = items.length;
-      totalFetched += count;
-      allResults.push(...items);
-
-      console.log(`📦 Offset ${offset} — ${count} items (Total: ${totalFetched})`);
-
-      if (count < PAGE_LIMIT) {
-        keepGoing = false;
-      } else {
-        offset += PAGE_LIMIT;
+  return new Promise((resolve, reject) => {
+    const processQueue = async () => {
+      if (queue.length === 0 && activeRequests === 0) {
+        // Done fetching all pages
+        const filtered = results.filter((item) => /2024|2025/.test(item.description));
+        const inventory = filtered.map((item) => ({
+          customSku: item.customSku,
+          name: item.description,
+          locations: (item.ItemShops?.ItemShop || []).map((loc) => ({
+            location: loc.Shop ? loc.Shop.name : "Unknown",
+            stock: parseInt(loc.qoh || "0"),
+          })),
+        }));
+        console.log(`Fetched ${inventory.length} filtered items total.`);
+        resolve(inventory);
+        return;
       }
-    } catch (err) {
-      console.error(`❌ Failed offset ${offset}:`, err.message || err);
-      keepGoing = false;
-    }
-  }
 
-  const filtered = allResults.filter(item => /2024|2025/.test(item.description || ""));
-  const inventory = filtered.map(item => ({
-    customSku: item.customSku,
-    name: item.description,
-    locations: (item.ItemShops?.ItemShop || []).map(loc => ({
-      location: loc.Shop?.name || "Unknown",
-      stock: parseInt(loc.qoh || "0")
-    }))
-  }));
+      while (queue.length > 0 && activeRequests < MAX_CONCURRENT_REQUESTS) {
+        const url = queue.shift();
+        activeRequests++;
 
-  console.log(`✅ DONE — Total fetched: ${allResults.length}, After filter: ${inventory.length}`);
-  return inventory;
+        fetchPage(url, accessToken, getAccessToken)
+          .then(({ data, token }) => {
+            accessToken = token;
+
+            const itemCount = data.Item ? data.Item.length : 0;
+            console.log(`Fetched page with ${itemCount} items`);
+
+            results.push(...(data.Item || []));
+
+            const nextUrl = data["@attributes"]?.next;
+            if (nextUrl) queue.push(nextUrl);
+
+            activeRequests--;
+            processQueue();
+          })
+          .catch((err) => {
+            reject(err);
+          });
+      }
+    };
+
+    processQueue();
+  });
 }
-
 
 module.exports = { getAccessToken, fetchInventoryData };

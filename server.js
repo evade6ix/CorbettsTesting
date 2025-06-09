@@ -141,7 +141,9 @@ async function fetchFilteredBigCommerceProducts() {
 // Combine BigCommerce and Lightspeed inventory by SKU prefix
 async function getCombinedInventory() {
   const bigCommerceProducts = await fetchFilteredBigCommerceProducts();
+  console.log(`Fetched ${bigCommerceProducts.length} BigCommerce products`);
   const lightspeedInventory = await fetchInventoryData();
+  console.log(`Fetched ${lightspeedInventory.length} Lightspeed items`);
 
   const lsMap = new Map();
   for (const item of lightspeedInventory) {

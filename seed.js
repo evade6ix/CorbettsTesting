@@ -1,8 +1,11 @@
 const { connectDB } = require("./db");
+require('dotenv').config();
 
 async function seedToken() {
   const db = await connectDB();
-  await db.collection("tokens").updateOne(
+  console.log("Connected to DB:", db.databaseName);
+
+  const result = await db.collection("tokens").updateOne(
     { type: "lightspeed" },
     {
       $set: {
@@ -13,6 +16,7 @@ async function seedToken() {
     },
     { upsert: true }
   );
+  console.log("Seed result:", result);
   console.log("✅ Token seeded");
   process.exit();
 }

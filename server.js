@@ -1,4 +1,5 @@
 const express = require("express");
+const cors = require("cors");
 const axios = require("axios");
 const { connectDB } = require("./db");
 const { fetchInventoryData } = require("./lightspeed");
@@ -6,6 +7,11 @@ require("dotenv").config();
 
 const app = express();
 const port = process.env.PORT || 3000;
+
+// Enable CORS only for your frontend domain
+app.use(cors({
+  origin: "https://www.corbetts.com"
+}));
 
 // ✅ Handle OAuth callback and store tokens in DB
 app.get("/callback", async (req, res) => {
@@ -53,7 +59,7 @@ app.get("/callback", async (req, res) => {
   }
 });
 
-// 🔍 Inventory lookup
+// 🔍 Inventory lookup by SKU
 app.get("/inventory/:sku", async (req, res) => {
   try {
     const db = await connectDB();

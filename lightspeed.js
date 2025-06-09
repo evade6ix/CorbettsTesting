@@ -2,13 +2,11 @@ const axios = require("axios");
 const { connectDB } = require("./db");
 require("dotenv").config();
 
-// CONFIG
 const PAGE_LIMIT = 100;
 const CONCURRENCY = 10;
 const MAX_RETRIES = 5;
 const RETRY_BASE_DELAY = 1000;
 
-// BigCommerce API client
 const BC_API = `https://api.bigcommerce.com/stores/${process.env.BC_STORE_HASH}/v3`;
 const bcAxios = axios.create({
   baseURL: BC_API,
@@ -19,12 +17,11 @@ const bcAxios = axios.create({
   }
 });
 
-// Token handler
 async function getAccessToken() {
   const db = await connectDB();
   const tokenDoc = await db.collection("tokens").findOne({ type: "lightspeed" });
 
-  if (!tokenDoc || !tokenDoc.refresh_token) {
+  if (!tokenDoc?.refresh_token) {
     throw new Error("No refresh token found in DB");
   }
 
@@ -59,7 +56,6 @@ async function getAccessToken() {
   }
 }
 
-// Retry helper
 function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -90,31 +86,39 @@ async function fetchPage(url, token, refreshTokenFunc, retryCount = 0) {
   }
 }
 
-// ✅ Fetch inventory from Lightspeed
 async function fetchInventoryData() {
   let accessToken = await getAccessToken();
   const accountID = process.env.ACCOUNT_ID;
-
   const baseUrl = `https://api.lightspeedapp.com/API/V3/Account/${accountID}/Item.json?limit=${PAGE_LIMIT}&load_relations=${encodeURIComponent(JSON.stringify(["ItemShops"]))}`;
+
   let offset = 0;
   let finished = false;
   const allResults = [];
 
   while (!finished) {
     const batch = [];
+
     for (let i = 0; i < CONCURRENCY; i++) {
-      const url = `${baseUrl}&offset=${offset}`;
-      batch.push(fetchPage(url, accessToken, getAccessToken).then(({ data, token }) => {
-        accessToken = token;
-        const items = data.Item || [];
-        if (items.length < PAGE_LIMIT) finished = true;
-        allResults.push(...items);
-        console.log(`📦 Offset ${offset} — Fetched ${items.length} items`);
-      }).catch(err => {
-        console.error(`❌ Error at offset ${offset}:`, err.message || err);
-        finished = true;
-      }));
+      const currentOffset = offset;
+      const url = `${baseUrl}&offset=${currentOffset}`;
       offset += PAGE_LIMIT;
+
+      batch.push(
+        fetchPage(url, accessToken, getAccessToken)
+          .then(({ data, token }) => {
+            accessToken = token;
+            const items = data.Item || [];
+            allResults.push(...items);
+            console.log(`📦 Offset ${currentOffset} — Fetched ${items.length} items`);
+            if (items.length < PAGE_LIMIT) {
+              finished = true;
+            }
+          })
+          .catch(err => {
+            console.error(`❌ Error at offset ${currentOffset}:`, err.message || err);
+            finished = true;
+          })
+      );
     }
 
     await Promise.all(batch);
@@ -134,7 +138,6 @@ async function fetchInventoryData() {
   return inventory;
 }
 
-// ✅ Sync to BigCommerce
 async function syncToBigCommerce(lightspeedInventory) {
   const allVariants = [];
   let page = 1;
@@ -177,7 +180,11 @@ async function syncToBigCommerce(lightspeedInventory) {
         console.log(`✅ ${sku} → ${variant.inventory_level} → ${totalStock}`);
         updated++;
       } catch (err) {
-        console.error(`❌ Failed to update ${sku}:`, err.response?.data || err.message);
+        if (err.response?.status === 404) {
+          console.warn(`⚠️ SKU ${sku} not found in BigCommerce (404)`);
+        } else {
+          console.error(`❌ Failed to update ${sku}:`, err.response?.data || err.message);
+        }
       }
     }
   }
@@ -185,7 +192,7 @@ async function syncToBigCommerce(lightspeedInventory) {
   console.log(`🎯 Sync complete — ${updated} variants updated`);
 }
 
-// 🔁 Combined main runner
+// MAIN RUNNER
 (async () => {
   const lightspeedData = await fetchInventoryData();
   await syncToBigCommerce(lightspeedData);

@@ -48,11 +48,14 @@ async function fetchInventoryData() {
   const accountID = process.env.ACCOUNT_ID;
 
   let allItems = [];
-  // Initial URL for first page
   let nextUrl = `https://api.lightspeedapp.com/API/V3/Account/${accountID}/Item.json?limit=${PAGE_LIMIT}&load_relations=${encodeURIComponent(JSON.stringify(["ItemShops"]))}`;
 
-  while (nextUrl) {
-    console.log(`Fetching ${nextUrl}...`);
+  let pageCount = 0;
+  const MAX_PAGES = 5;
+
+  while (nextUrl && pageCount < MAX_PAGES) {
+    pageCount++;
+    console.log(`Fetching page ${pageCount}: ${nextUrl}...`);
 
     const res = await axios.get(nextUrl, {
       headers: { Authorization: `Bearer ${token}` }
@@ -80,5 +83,6 @@ async function fetchInventoryData() {
 
   return inventory;
 }
+
 
 module.exports = { getAccessToken, fetchInventoryData };

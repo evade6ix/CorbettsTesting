@@ -51,9 +51,8 @@ async function fetchInventoryData() {
   let nextUrl = `https://api.lightspeedapp.com/API/V3/Account/${accountID}/Item.json?limit=${PAGE_LIMIT}&load_relations=${encodeURIComponent(JSON.stringify(["ItemShops"]))}`;
 
   let pageCount = 0;
-  const MAX_PAGES = 5;
 
-  while (nextUrl && pageCount < MAX_PAGES) {
+  while (nextUrl) {
     pageCount++;
     console.log(`Fetching page ${pageCount}: ${nextUrl}...`);
 
@@ -68,8 +67,11 @@ async function fetchInventoryData() {
     nextUrl = res.data['@attributes']?.next || null;
   }
 
+  // Filter items to only those with '2024' or '2025' in the description
+  const filteredItems = allItems.filter(item => /2024|2025/.test(item.description));
+
   // Map to your inventory format
-  const inventory = allItems.map(item => {
+  const inventory = filteredItems.map(item => {
     const customSku = item.customSku;
     const name = item.description;
     const locations = (item.ItemShops?.ItemShop || []).map(loc => ({
@@ -79,7 +81,7 @@ async function fetchInventoryData() {
     return { customSku, name, locations };
   });
 
-  console.log(`Fetched ${inventory.length} items total.`);
+  console.log(`Fetched ${inventory.length} filtered items total.`);
 
   return inventory;
 }

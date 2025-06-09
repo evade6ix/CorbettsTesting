@@ -1,6 +1,6 @@
-import cron from "node-cron"
-import { fetchInventoryData } from "./lightspeed.js"
-import { connectDB } from "./db.js"
+const cron = require("node-cron")
+const { fetchInventoryData } = require("./lightspeed")
+const { connectDB } = require("./db")
 
 cron.schedule("*/30 * * * *", async () => {
   console.log("🔁 Syncing inventory from Lightspeed...")

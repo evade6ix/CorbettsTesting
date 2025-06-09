@@ -7,21 +7,11 @@ const CONCURRENCY = 10;
 const MAX_RETRIES = 5;
 const RETRY_BASE_DELAY = 1000;
 
-const BC_API = `https://api.bigcommerce.com/stores/${process.env.BC_STORE_HASH}/v3`;
-const bcAxios = axios.create({
-  baseURL: BC_API,
-  headers: {
-    "X-Auth-Token": process.env.BC_ACCESS_TOKEN,
-    "Accept": "application/json",
-    "Content-Type": "application/json"
-  }
-});
-
 async function getAccessToken() {
   const db = await connectDB();
   const tokenDoc = await db.collection("tokens").findOne({ type: "lightspeed" });
 
-  if (!tokenDoc?.refresh_token) {
+  if (!tokenDoc || !tokenDoc.refresh_token) {
     throw new Error("No refresh token found in DB");
   }
 
@@ -89,36 +79,27 @@ async function fetchPage(url, token, refreshTokenFunc, retryCount = 0) {
 async function fetchInventoryData() {
   let accessToken = await getAccessToken();
   const accountID = process.env.ACCOUNT_ID;
-  const baseUrl = `https://api.lightspeedapp.com/API/V3/Account/${accountID}/Item.json?limit=${PAGE_LIMIT}&load_relations=${encodeURIComponent(JSON.stringify(["ItemShops"]))}`;
 
+  const baseUrl = `https://api.lightspeedapp.com/API/V3/Account/${accountID}/Item.json?limit=${PAGE_LIMIT}&load_relations=${encodeURIComponent(JSON.stringify(["ItemShops"]))}`;
   let offset = 0;
   let finished = false;
   const allResults = [];
 
   while (!finished) {
     const batch = [];
-
     for (let i = 0; i < CONCURRENCY; i++) {
-      const currentOffset = offset;
-      const url = `${baseUrl}&offset=${currentOffset}`;
+      const url = `${baseUrl}&offset=${offset}`;
+      batch.push(fetchPage(url, accessToken, getAccessToken).then(({ data, token }) => {
+        accessToken = token;
+        const items = data.Item || [];
+        if (items.length < PAGE_LIMIT) finished = true;
+        allResults.push(...items);
+        console.log(`📦 Offset ${offset} — Fetched ${items.length} items`);
+      }).catch(err => {
+        console.error(`❌ Failed offset ${offset}:`, err.message || err);
+        finished = true; // fail-safe
+      }));
       offset += PAGE_LIMIT;
-
-      batch.push(
-        fetchPage(url, accessToken, getAccessToken)
-          .then(({ data, token }) => {
-            accessToken = token;
-            const items = data.Item || [];
-            allResults.push(...items);
-            console.log(`📦 Offset ${currentOffset} — Fetched ${items.length} items`);
-            if (items.length < PAGE_LIMIT) {
-              finished = true;
-            }
-          })
-          .catch(err => {
-            console.error(`❌ Error at offset ${currentOffset}:`, err.message || err);
-            finished = true;
-          })
-      );
     }
 
     await Promise.all(batch);
@@ -138,62 +119,4 @@ async function fetchInventoryData() {
   return inventory;
 }
 
-async function syncToBigCommerce(lightspeedInventory) {
-  const allVariants = [];
-  let page = 1;
-  const limit = 250;
-
-  while (true) {
-    const { data } = await bcAxios.get(`/catalog/variants`, {
-      params: { page, limit }
-    });
-
-    const variants = data.data;
-    if (!variants.length) break;
-
-    allVariants.push(...variants);
-    page++;
-  }
-
-  console.log(`📦 Pulled ${allVariants.length} BigCommerce variants`);
-
-  const variantMap = new Map();
-  for (const variant of allVariants) {
-    if (variant.sku) {
-      variantMap.set(variant.sku.trim(), variant);
-    }
-  }
-
-  let updated = 0;
-  for (const item of lightspeedInventory) {
-    const sku = item.customSku?.trim();
-    const totalStock = item.locations.reduce((sum, loc) => sum + (loc.stock || 0), 0);
-
-    if (!sku || !variantMap.has(sku)) continue;
-
-    const variant = variantMap.get(sku);
-    if (variant.inventory_level !== totalStock) {
-      try {
-        await bcAxios.put(`/catalog/products/${variant.product_id}/variants/${variant.id}`, {
-          inventory_level: totalStock
-        });
-        console.log(`✅ ${sku} → ${variant.inventory_level} → ${totalStock}`);
-        updated++;
-      } catch (err) {
-        if (err.response?.status === 404) {
-          console.warn(`⚠️ SKU ${sku} not found in BigCommerce (404)`);
-        } else {
-          console.error(`❌ Failed to update ${sku}:`, err.response?.data || err.message);
-        }
-      }
-    }
-  }
-
-  console.log(`🎯 Sync complete — ${updated} variants updated`);
-}
-
-// MAIN RUNNER
-(async () => {
-  const lightspeedData = await fetchInventoryData();
-  await syncToBigCommerce(lightspeedData);
-})();
+module.exports = { getAccessToken, fetchInventoryData };

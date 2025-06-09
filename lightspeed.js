@@ -2,7 +2,7 @@ const axios = require("axios");
 const { connectDB } = require("./db");
 require("dotenv").config();
 
-const PAGE_LIMIT = 100; // max per Lightspeed docs
+const PAGE_LIMIT = 100;
 const MAX_CONCURRENT_REQUESTS = 5;
 const MAX_RETRIES = 5;
 const RETRY_BASE_DELAY = 1000;
@@ -40,14 +40,14 @@ async function getAccessToken() {
 
     console.log("✅ Got access token");
     return data.access_token;
-  } catch (err) {
-    console.error("❌ Failed to get access token:", err.response?.data || err.message);
-    throw err;
+  } catch (error) {
+    console.error("❌ Failed to get access token:", error.response?.data || error.message);
+    throw error;
   }
 }
 
 function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((res) => setTimeout(res, ms));
 }
 
 async function fetchPage(url, token, refreshTokenFunc, retryCount = 0) {
@@ -56,8 +56,8 @@ async function fetchPage(url, token, refreshTokenFunc, retryCount = 0) {
       headers: { Authorization: `Bearer ${token}` },
     });
     return { data: res.data, token };
-  } catch (err) {
-    const status = err.response?.status;
+  } catch (error) {
+    const status = error.response?.status;
 
     if (status === 401 && retryCount === 0) {
       console.log("⚠️ Access token expired, refreshing...");
@@ -67,12 +67,12 @@ async function fetchPage(url, token, refreshTokenFunc, retryCount = 0) {
 
     if ((status === 429 || status === 503) && retryCount < MAX_RETRIES) {
       const delayMs = RETRY_BASE_DELAY * 2 ** retryCount;
-      console.warn(`Rate limited or service unavailable. Retrying in ${delayMs} ms...`);
+      console.warn(`Rate limited or service unavailable. Retrying in ${delayMs}ms...`);
       await delay(delayMs);
       return fetchPage(url, token, refreshTokenFunc, retryCount + 1);
     }
 
-    throw err;
+    throw error;
   }
 }
 
@@ -84,55 +84,49 @@ async function fetchInventoryData() {
     JSON.stringify(["ItemShops"])
   )}&sort=itemID`;
 
-  let queue = [baseUrl];
-  let results = [];
-  let activeRequests = 0;
+  let nextUrls = [baseUrl];
+  let allItems = [];
 
-  return new Promise((resolve, reject) => {
-    const processQueue = async () => {
-      if (queue.length === 0 && activeRequests === 0) {
-        // Done fetching all pages
-        const filtered = results.filter((item) => /2024|2025/.test(item.description));
-        const inventory = filtered.map((item) => ({
-          customSku: item.customSku,
-          name: item.description,
-          locations: (item.ItemShops?.ItemShop || []).map((loc) => ({
-            location: loc.Shop ? loc.Shop.name : "Unknown",
-            stock: parseInt(loc.qoh || "0"),
-          })),
-        }));
-        console.log(`Fetched ${inventory.length} filtered items total.`);
-        resolve(inventory);
-        return;
-      }
+  while (nextUrls.length > 0) {
+    // Fetch up to MAX_CONCURRENT_REQUESTS pages in parallel
+    const batch = nextUrls.splice(0, MAX_CONCURRENT_REQUESTS);
 
-      while (queue.length > 0 && activeRequests < MAX_CONCURRENT_REQUESTS) {
-        const url = queue.shift();
-        activeRequests++;
+    console.log(`Fetching batch of ${batch.length} pages...`);
 
-        fetchPage(url, accessToken, getAccessToken)
-          .then(({ data, token }) => {
-            accessToken = token;
+    const results = await Promise.all(
+      batch.map((url) => fetchPage(url, accessToken, getAccessToken))
+    );
 
-            const itemCount = data.Item ? data.Item.length : 0;
-            console.log(`Fetched page with ${itemCount} items`);
+    // Update access token if refreshed in any request
+    for (const result of results) {
+      accessToken = result.token;
+      allItems.push(...(result.data.Item || []));
+    }
 
-            results.push(...(data.Item || []));
+    // Collect next page URLs for next batch
+    nextUrls = results
+      .map((result) => result.data["@attributes"]?.next)
+      .filter((url) => url);
 
-            const nextUrl = data["@attributes"]?.next;
-            if (nextUrl) queue.push(nextUrl);
+    console.log(`Total items fetched so far: ${allItems.length}`);
+  }
 
-            activeRequests--;
-            processQueue();
-          })
-          .catch((err) => {
-            reject(err);
-          });
-      }
-    };
+  // Filter 2024 or 2025 in description
+  const filtered = allItems.filter((item) => /2024|2025/.test(item.description));
 
-    processQueue();
-  });
+  // Map to your inventory format
+  const inventory = filtered.map((item) => ({
+    customSku: item.customSku,
+    name: item.description,
+    locations: (item.ItemShops?.ItemShop || []).map((loc) => ({
+      location: loc.Shop ? loc.Shop.name : "Unknown",
+      stock: parseInt(loc.qoh || "0"),
+    })),
+  }));
+
+  console.log(`✅ Finished fetching. Total filtered items: ${inventory.length}`);
+
+  return inventory;
 }
 
 module.exports = { getAccessToken, fetchInventoryData };

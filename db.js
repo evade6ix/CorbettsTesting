@@ -1,12 +1,15 @@
+// db.js
 const { MongoClient } = require("mongodb")
 require("dotenv").config()
 
-const client = new MongoClient(process.env.MONGO_URI)
-const dbName = "inventory"
+let client
 
 async function connectDB() {
-  if (!client.isConnected) await client.connect()
-  return client.db(dbName)
+  if (!client) {
+    client = new MongoClient(process.env.MONGO_URI, { useUnifiedTopology: true })
+    await client.connect()
+  }
+  return client.db("inventory") // This name can be anything; “inventory” is fine
 }
 
 module.exports = { connectDB }

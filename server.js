@@ -7,7 +7,7 @@ require("dotenv").config();
 const app = express();
 const port = process.env.PORT || 3000;
 
-// ✅ Handle OAuth callback and exchange for tokens
+// ✅ Handle OAuth callback and store tokens in DB
 app.get("/callback", async (req, res) => {
   const code = req.query.code;
 
@@ -32,12 +32,24 @@ app.get("/callback", async (req, res) => {
       }
     );
 
-    console.log("✅ Access Token:", data.access_token);
-    console.log("✅ Refresh Token:", data.refresh_token);
-    res.send("✅ Token exchange successful. Check logs.");
+    const db = await connectDB();
+    await db.collection("tokens").updateOne(
+      { type: "lightspeed" },
+      {
+        $set: {
+          access_token: data.access_token,
+          refresh_token: data.refresh_token,
+          updatedAt: new Date()
+        }
+      },
+      { upsert: true }
+    );
+
+    console.log("✅ Tokens stored to DB");
+    res.send("✅ Token exchange successful. Refresh token saved to DB.");
   } catch (err) {
     console.error("❌ Failed to exchange code:", err.response?.data || err.message);
-    res.status(500).send("❌ Failed to exchange token.");
+    res.status(500).send("❌ Token exchange failed");
   }
 });
 

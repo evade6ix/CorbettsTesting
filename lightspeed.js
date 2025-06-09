@@ -86,21 +86,23 @@ async function fetchInventoryData() {
   const queue = [firstUrl];
   const results = [];
   let activeRequests = 0;
+  let totalFetched = 0;
+  let pageCount = 0;
 
   return new Promise((resolve, reject) => {
     const processQueue = async () => {
       if (queue.length === 0 && activeRequests === 0) {
         // All done
-        const filtered = results.filter(item => /2024|2025/.test(item.description));
+        const filtered = results.filter(item => /2024|2025/.test(item.description || ""));
         const inventory = filtered.map(item => ({
           customSku: item.customSku,
           name: item.description,
           locations: (item.ItemShops?.ItemShop || []).map(loc => ({
-            location: loc.Shop ? loc.Shop.name : "Unknown",
+            location: loc.Shop?.name || "Unknown",
             stock: parseInt(loc.qoh || "0")
           }))
         }));
-        console.log(`Fetched ${inventory.length} items total.`);
+        console.log(`✅ DONE — Fetched ${inventory.length} items total.`);
         resolve(inventory);
         return;
       }
@@ -108,12 +110,17 @@ async function fetchInventoryData() {
       while (queue.length > 0 && activeRequests < MAX_CONCURRENT_REQUESTS) {
         const url = queue.shift();
         activeRequests++;
+        pageCount++;
 
         fetchPage(url, accessToken, getAccessToken)
           .then(({ data, token }) => {
             accessToken = token; // Update token if refreshed
 
-            results.push(...(data.Item || []));
+            const items = data.Item || [];
+            results.push(...items);
+            totalFetched += items.length;
+
+            console.log(`📦 Page ${pageCount} — Fetched ${items.length} items (Total: ${totalFetched})`);
 
             const nextUrl = data['@attributes']?.next;
             if (nextUrl) queue.push(nextUrl);
@@ -122,6 +129,7 @@ async function fetchInventoryData() {
             processQueue();
           })
           .catch(err => {
+            console.error("❌ Error while fetching page:", err.response?.data || err.message);
             reject(err);
           });
       }
@@ -130,5 +138,6 @@ async function fetchInventoryData() {
     processQueue();
   });
 }
+
 
 module.exports = { getAccessToken, fetchInventoryData };

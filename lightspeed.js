@@ -10,10 +10,7 @@ const RETRY_BASE_DELAY = 1000;
 async function getAccessToken() {
   const db = await connectDB();
   const tokenDoc = await db.collection("tokens").findOne({ type: "lightspeed" });
-
-  if (!tokenDoc || !tokenDoc.refresh_token) {
-    throw new Error("No refresh token found in DB");
-  }
+  if (!tokenDoc || !tokenDoc.refresh_token) throw new Error("No refresh token in DB");
 
   try {
     const { data } = await axios.post(
@@ -29,35 +26,27 @@ async function getAccessToken() {
 
     await db.collection("tokens").updateOne(
       { type: "lightspeed" },
-      {
-        $set: {
-          access_token: data.access_token,
-          refresh_token: data.refresh_token,
-          updatedAt: new Date(),
-        },
-      }
+      { $set: { access_token: data.access_token, refresh_token: data.refresh_token, updatedAt: new Date() } }
     );
 
     console.log("✅ Got access token");
     return data.access_token;
-  } catch (error) {
-    console.error("❌ Failed to get access token:", error.response?.data || error.message);
-    throw error;
+  } catch (e) {
+    console.error("❌ Failed to refresh access token:", e.response?.data || e.message);
+    throw e;
   }
 }
 
 function delay(ms) {
-  return new Promise((res) => setTimeout(res, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function fetchPage(url, token, refreshTokenFunc, retryCount = 0) {
   try {
-    const res = await axios.get(url, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
+    const res = await axios.get(url, { headers: { Authorization: `Bearer ${token}` } });
     return { data: res.data, token };
-  } catch (error) {
-    const status = error.response?.status;
+  } catch (e) {
+    const status = e.response?.status;
 
     if (status === 401 && retryCount === 0) {
       console.log("⚠️ Access token expired, refreshing...");
@@ -67,66 +56,67 @@ async function fetchPage(url, token, refreshTokenFunc, retryCount = 0) {
 
     if ((status === 429 || status === 503) && retryCount < MAX_RETRIES) {
       const delayMs = RETRY_BASE_DELAY * 2 ** retryCount;
-      console.warn(`Rate limited or service unavailable. Retrying in ${delayMs}ms...`);
+      console.warn(`Rate limited or service unavailable. Retrying after ${delayMs}ms...`);
       await delay(delayMs);
       return fetchPage(url, token, refreshTokenFunc, retryCount + 1);
     }
 
-    throw error;
+    throw e;
   }
 }
 
 async function fetchInventoryData() {
   let accessToken = await getAccessToken();
   const accountID = process.env.ACCOUNT_ID;
-
   const baseUrl = `https://api.lightspeedapp.com/API/V3/Account/${accountID}/Item.json?limit=${PAGE_LIMIT}&load_relations=${encodeURIComponent(
     JSON.stringify(["ItemShops"])
   )}&sort=itemID`;
 
-  let nextUrls = [baseUrl];
+  let queue = [baseUrl];
   let allItems = [];
+  let activeRequests = 0;
 
-  while (nextUrls.length > 0) {
-    // Fetch up to MAX_CONCURRENT_REQUESTS pages in parallel
-    const batch = nextUrls.splice(0, MAX_CONCURRENT_REQUESTS);
+  return new Promise((resolve, reject) => {
+    const processQueue = () => {
+      if (queue.length === 0 && activeRequests === 0) {
+        // Finished fetching
+        const filtered = allItems.filter((item) => /2024|2025/.test(item.description));
+        const inventory = filtered.map((item) => ({
+          customSku: item.customSku,
+          name: item.description,
+          locations: (item.ItemShops?.ItemShop || []).map((loc) => ({
+            location: loc.Shop ? loc.Shop.name : "Unknown",
+            stock: parseInt(loc.qoh || "0"),
+          })),
+        }));
+        console.log(`✅ Finished. Fetched ${inventory.length} filtered items.`);
+        resolve(inventory);
+        return;
+      }
 
-    console.log(`Fetching batch of ${batch.length} pages...`);
+      while (queue.length > 0 && activeRequests < MAX_CONCURRENT_REQUESTS) {
+        const url = queue.shift();
+        activeRequests++;
 
-    const results = await Promise.all(
-      batch.map((url) => fetchPage(url, accessToken, getAccessToken))
-    );
+        fetchPage(url, accessToken, getAccessToken)
+          .then(({ data, token }) => {
+            accessToken = token; // update token if refreshed
+            allItems.push(...(data.Item || []));
 
-    // Update access token if refreshed in any request
-    for (const result of results) {
-      accessToken = result.token;
-      allItems.push(...(result.data.Item || []));
-    }
+            const nextUrl = data["@attributes"]?.next;
+            if (nextUrl) queue.push(nextUrl);
 
-    // Collect next page URLs for next batch
-    nextUrls = results
-      .map((result) => result.data["@attributes"]?.next)
-      .filter((url) => url);
+            activeRequests--;
+            processQueue();
+          })
+          .catch((error) => {
+            reject(error);
+          });
+      }
+    };
 
-    console.log(`Total items fetched so far: ${allItems.length}`);
-  }
-
-  // Filter 2024 or 2025 in description
-  const filtered = allItems.filter((item) => /2024|2025/.test(item.description));
-
-  // Map to your inventory format
-  const inventory = filtered.map((item) => ({
-    customSku: item.customSku,
-    name: item.description,
-    locations: (item.ItemShops?.ItemShop || []).map((loc) => ({
-      location: loc.Shop ? loc.Shop.name : "Unknown",
-      stock: parseInt(loc.qoh || "0"),
-    })),
-  }));
-
-  console.log(`✅ Finished fetching. Total filtered items: ${inventory.length}`);
-
-  return inventory;
+    processQueue();
+  });
 }
 
 module.exports = { getAccessToken, fetchInventoryData };

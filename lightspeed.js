@@ -79,27 +79,41 @@ async function fetchPage(url, token, refreshTokenFunc, retryCount = 0) {
 async function fetchInventoryData() {
   let accessToken = await getAccessToken();
   const accountID = process.env.ACCOUNT_ID;
-
   const baseUrl = `https://api.lightspeedapp.com/API/V3/Account/${accountID}/Item.json?limit=${PAGE_LIMIT}&load_relations=${encodeURIComponent(JSON.stringify(["ItemShops"]))}`;
+
   let offset = 0;
-  let finished = false;
   const allResults = [];
+  let finished = false;
+  let totalFetched = 0;
 
   while (!finished) {
     const batch = [];
+
     for (let i = 0; i < CONCURRENCY; i++) {
-      const url = `${baseUrl}&offset=${offset}`;
-      batch.push(fetchPage(url, accessToken, getAccessToken).then(({ data, token }) => {
-        accessToken = token;
-        const items = data.Item || [];
-        if (items.length < PAGE_LIMIT) finished = true;
-        allResults.push(...items);
-        console.log(`📦 Offset ${offset} — Fetched ${items.length} items`);
-      }).catch(err => {
-        console.error(`❌ Failed offset ${offset}:`, err.message || err);
-        finished = true; // fail-safe
-      }));
+      const thisOffset = offset;
+      const url = `${baseUrl}&offset=${thisOffset}`;
       offset += PAGE_LIMIT;
+
+      batch.push(
+        fetchPage(url, accessToken, getAccessToken)
+          .then(({ data, token }) => {
+            accessToken = token;
+            const items = data.Item || [];
+
+            allResults.push(...items);
+            totalFetched += items.length;
+
+            console.log(`📦 Offset ${thisOffset} — ${items.length} items (Total so far: ${totalFetched})`);
+
+            if (items.length < PAGE_LIMIT) {
+              finished = true;
+            }
+          })
+          .catch(err => {
+            console.error(`❌ Offset ${thisOffset} failed:`, err.message || err);
+            finished = true;
+          })
+      );
     }
 
     await Promise.all(batch);
@@ -118,5 +132,6 @@ async function fetchInventoryData() {
   console.log(`✅ DONE — Total fetched: ${allResults.length}, After filter: ${inventory.length}`);
   return inventory;
 }
+
 
 module.exports = { getAccessToken, fetchInventoryData };

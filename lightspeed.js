@@ -42,4 +42,29 @@ async function getAccessToken() {
   }
 }
 
-module.exports = { getAccessToken };
+async function fetchInventoryData() {
+  const token = await getAccessToken();
+  const accountID = process.env.ACCOUNT_ID;
+
+  const itemsRes = await axios.get(
+    `https://api.lightspeedapp.com/API/Account/${accountID}/Item.json`,
+    {
+      headers: { Authorization: `Bearer ${token}` },
+      params: { load_relations: "ItemShops" }
+    }
+  );
+
+  const inventory = itemsRes.data.Item.map(item => {
+    const customSku = item.customSku;
+    const name = item.description;
+    const locations = (item.ItemShops?.ItemShop || []).map(loc => ({
+      location: loc.Shop.name,
+      stock: parseInt(loc.qoh || "0")
+    }));
+    return { customSku, name, locations };
+  });
+
+  return inventory;
+}
+
+module.exports = { getAccessToken, fetchInventoryData };

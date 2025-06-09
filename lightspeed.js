@@ -22,7 +22,6 @@ async function getAccessToken() {
       { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
     );
 
-    // Store new refresh token in DB
     await db.collection("tokens").updateOne(
       { type: "lightspeed" },
       {
@@ -58,7 +57,7 @@ async function fetchInventoryData() {
     const customSku = item.customSku;
     const name = item.description;
     const locations = (item.ItemShops?.ItemShop || []).map(loc => ({
-      location: loc.Shop.name,
+      location: loc.Shop ? loc.Shop.name : "Unknown",
       stock: parseInt(loc.qoh || "0")
     }));
     return { customSku, name, locations };

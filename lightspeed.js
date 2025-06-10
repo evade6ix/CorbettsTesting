@@ -3,7 +3,6 @@ const { connectDB } = require("./db");
 require("dotenv").config();
 
 const PAGE_LIMIT = 100; // Max items per page (Lightspeed max)
-const MAX_PAGES = 10;   // Fetch up to 10 pages = 1000 items
 
 async function getAccessToken() {
   const db = await connectDB();
@@ -49,28 +48,24 @@ async function fetchInventoryData() {
   const accountID = process.env.ACCOUNT_ID;
 
   let allItems = [];
-  for (let page = 1; page <= MAX_PAGES; page++) {
-    console.log(`Fetching page ${page}...`);
-    const itemsRes = await axios.get(
-      `https://api.lightspeedapp.com/API/Account/${accountID}/Item.json`,
-      {
-        headers: { Authorization: `Bearer ${token}` },
-        params: { 
-          load_relations: JSON.stringify(["ItemShops"]),
-          limit: PAGE_LIMIT,
-          page: page
-        }
-      }
-    );
+  let nextUrl = `https://api.lightspeedapp.com/API/V3/Account/${accountID}/Item.json?limit=${PAGE_LIMIT}&load_relations=${encodeURIComponent(JSON.stringify(["ItemShops"]))}`;
 
-    const items = itemsRes.data.Item || [];
+  let pageCount = 0;
+  const MAX_PAGES = 5;
+
+  while (nextUrl && pageCount < MAX_PAGES) {
+    pageCount++;
+    console.log(`Fetching page ${pageCount}: ${nextUrl}...`);
+
+    const res = await axios.get(nextUrl, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+
+    const items = res.data.Item || [];
     allItems = allItems.concat(items);
 
-    // If fewer than PAGE_LIMIT items returned, no more pages
-    if (items.length < PAGE_LIMIT) {
-      console.log(`Last page reached at page ${page}`);
-      break;
-    }
+    // Get next page URL from response metadata
+    nextUrl = res.data['@attributes']?.next || null;
   }
 
   // Map to your inventory format
@@ -88,5 +83,6 @@ async function fetchInventoryData() {
 
   return inventory;
 }
+
 
 module.exports = { getAccessToken, fetchInventoryData };

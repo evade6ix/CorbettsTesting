@@ -85,7 +85,7 @@ app.get("/inventory/:sku", async (req, res) => {
 app.get("/sync-now", async (req, res) => {
   try {
     const db = await connectDB();
-    const collection = db.collection("inventory");
+    const collection = db.collection("lightspeed_products");
     const data = await fetchInventoryData();
 
     for (const item of data) {
@@ -181,6 +181,12 @@ app.get("/combined-inventory", async (req, res) => {
     res.status(500).json({ error: "Internal server error" });
   }
 });
+
+const fs = require("fs");
+const path = require("path");
+const csv = require("csv-parser");
+const { MongoClient } = require("mongodb");
+
 
 app.listen(port, () => {
   console.log(`✅ Inventory API running at http://localhost:${port}`);

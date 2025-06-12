@@ -90,6 +90,7 @@ app.get("/sync-now", async (req, res) => {
 
     for (const item of data) {
       await collection.updateOne(
+        
         { customSku: item.customSku },
         { $set: item },
         { upsert: true }

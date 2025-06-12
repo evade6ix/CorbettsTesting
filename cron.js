@@ -5,7 +5,7 @@ const { connectDB } = require("./db")
 cron.schedule("*/30 * * * *", async () => {
   console.log("🔁 Syncing inventory from Lightspeed...")
   const db = await connectDB()
-  const collection = db.collection("inventory")
+  const collection = db.collection("lightspeed_products")
 
   const data = await fetchInventoryData()
   for (const item of data) {

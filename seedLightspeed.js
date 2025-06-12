@@ -22,20 +22,46 @@ const results = [];
 MongoClient.connect(MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
   .then(async (client) => {
     const db = client.db("inventory");
-    const collection = db.collection("lightspeed_products");
+    const collection = db.collection("inventory"); // match your API route
 
     fs.createReadStream(csvPath)
       .pipe(csv())
       .on("data", (row) => {
-        const item = row["Item"] || "";
-        if (item.includes("2024") || item.includes("2025")) {
-          results.push(row);
+        const itemName = row["Item"] || "";
+        if (itemName.includes("2024") || itemName.includes("2025")) {
+          const normalized = {
+            customSku: row["Custom SKU"],
+            item: row["Item"],
+            brand: row["Brand"],
+            upc: row["UPC"],
+            manufactSku: row["Manufact. SKU"],
+            systemId: row["System ID"],
+            price: row["Price"],
+            tax: row["Tax"],
+            msrp: row["MSRP"],
+            locations: {
+              collingwood: parseInt(row[" Collingwood "]) || 0,
+              corbetts: parseInt(row[" Corbetts Ski & Snowboard "]) || 0,
+              clearance: parseInt(row[" Clearance Centre "]) || 0,
+              reruns: parseInt(row[" ReRuns Basement "]) || 0,
+              skiShow: parseInt(row[" Ski Show "]) || 0
+            }
+          };
+          results.push(normalized);
         }
       })
       .on("end", async () => {
-        await collection.deleteMany({});
-        await collection.insertMany(results);
-        console.log(`✅ Seeded ${results.length} filtered items into MongoDB`);
+        let inserted = 0;
+        for (const doc of results) {
+          await collection.updateOne(
+            { customSku: doc.customSku },
+            { $set: doc },
+            { upsert: true }
+          );
+          inserted++;
+        }
+
+        console.log(`✅ Seeded ${inserted} filtered items into MongoDB`);
         client.close();
         process.exit();
       });
